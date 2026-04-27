@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import os
 
-DISCORD_WEBHOOK_URL = os.environ["https://discord.com/api/webhooks/1498340009651081407/wxy760JKgqNkIwydZnkSAwtkpWOeMEXDf0Fa6ESSoAIUW8oL-Gyx8qph7-EZIW_6lUHs"]
+DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 TAKE_PROFIT = 1.13
 STOP_LOSS = 0.95
