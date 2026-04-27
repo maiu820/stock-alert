@@ -1,5 +1,7 @@
 import yfinance as yf
 import pandas as pd
+import requests
+import os
 
 TAKE_PROFIT = 1.13
 STOP_LOSS = 0.95
