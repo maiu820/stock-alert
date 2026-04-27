@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import os
 
+DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
+
 TAKE_PROFIT = 1.13
 STOP_LOSS = 0.95
 
