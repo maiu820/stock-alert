@@ -2,12 +2,53 @@ import yfinance as yf
 import pandas as pd
 import requests
 import os
+import datetime
 
-DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
+# ===== Discord設定 =====
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+portfolio_file = "portfolio.csv"
+sell_msgs = []
+
+if os.path.exists(portfolio_file):
+    pf = pd.read_csv(portfolio_file)
+
+    for i, row in pf.iterrows():
+        ticker = row["コード"]
+        buy_price = row["購入価格"]
+        buy_date = pd.to_datetime(row["購入日"])
+
+        try:
+            data = yf.download(ticker, period="5d", interval="1d", progress=False)
+
+            if len(data) == 0:
+                continue
+
+            current_price = float(data["Close"].iloc[-1])
+            change = current_price / buy_price
+            days_held = (datetime.datetime.now() - buy_date).days
+
+            if change >= 1.13:
+                sell_msgs.append(f"利確: {ticker} 現在値 {current_price}")
+
+            elif change <= 0.95:
+                sell_msgs.append(f"損切: {ticker} 現在値 {current_price}")
+
+            elif days_held >= 5:
+                sell_msgs.append(f"5日経過: {ticker} 現在値 {current_price}")
+
+        except Exception as e:
+            print("売りチェックエラー:", ticker, e)
+
+if not DISCORD_WEBHOOK_URL:
+    DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1498340009651081407/wxy760JKgqNkIwydZnkSAwtkpWOeMEXDf0Fa6ESSoAIUW8oL-Gyx8qph7-EZIW_6lUHs"
+
+# ===== 設定 =====
 TAKE_PROFIT = 1.13
 STOP_LOSS = 0.95
+MAX_BUY_AMOUNT = 300000  # 100株で30万円以内
 
+# ===== 固定銘柄 =====
 base_tickers = {
     "トヨタ": "7203.T",
     "ソニーG": "6758.T",
@@ -58,9 +99,7 @@ try:
 
     codes = list(dict.fromkeys(codes))
 
-    exclude_codes = {
-        "1570", "1357", "1458", "1360", "1579", "1306", "1321", "1459"
-    }
+    exclude_codes = {"1570", "1357", "1458", "1360", "1579", "1306", "1321", "1459"}
 
     for code in codes:
         if code not in exclude_codes:
@@ -84,13 +123,13 @@ if isinstance(nikkei.columns, pd.MultiIndex):
 nikkei["MA25"] = nikkei["Close"].rolling(25).mean()
 nikkei["MA200"] = nikkei["Close"].rolling(200).mean()
 
-latest = nikkei.iloc[-1]
-prev = nikkei.iloc[-2]
+latest_nikkei = nikkei.iloc[-1]
+prev_nikkei = nikkei.iloc[-2]
 
-nikkei_close = float(latest["Close"])
-nikkei_ma25 = float(latest["MA25"])
-nikkei_ma200 = float(latest["MA200"])
-nikkei_ma200_prev = float(prev["MA200"])
+nikkei_close = float(latest_nikkei["Close"])
+nikkei_ma25 = float(latest_nikkei["MA25"])
+nikkei_ma200 = float(latest_nikkei["MA200"])
+nikkei_ma200_prev = float(prev_nikkei["MA200"])
 
 market_on = (
     nikkei_close > nikkei_ma25 and
@@ -104,10 +143,19 @@ print("日経200日線:", round(nikkei_ma200, 1))
 print("地合い:", "ON" if market_on else "OFF")
 
 if not market_on:
-    print("\n地合いNG → 今日は新規買いなし")
+    msg = (
+        "【本日の買い候補】\n"
+        "地合いOFFのため、新規買いなし\n\n"
+        f"日経平均: {round(nikkei_close, 1)}\n"
+        f"25日線: {round(nikkei_ma25, 1)}\n"
+        f"200日線: {round(nikkei_ma200, 1)}"
+    )
+    print(msg)
+    requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
 
 else:
     results = []
+    watch_results = []
 
     for name, ticker in all_tickers.items():
         try:
@@ -121,59 +169,77 @@ else:
 
             data["MA25"] = data["Close"].rolling(25).mean()
             data["VolumeAvg5"] = data["Volume"].rolling(5).mean()
-            data["Volatility20"] = data["Close"].pct_change().rolling(20).std()
+            data["Volatility20"] = data["Close"].pct_change(fill_method=None).rolling(20).std()
 
             latest = data.iloc[-1]
 
             close = float(latest["Close"])
+            buy_amount = close * 100
+
+            # ===== 資金フィルター =====
+            if buy_amount > MAX_BUY_AMOUNT:
+                continue
+
             ma25 = float(latest["MA25"])
             volume = float(latest["Volume"])
             volume_avg5 = float(latest["VolumeAvg5"])
             volatility = float(latest["Volatility20"])
 
             high10_prev = float(data["High"].iloc[-11:-1].max())
-            change_1d = float(data["Close"].pct_change().iloc[-1])
+            change_1d = float(data["Close"].pct_change(fill_method=None).iloc[-1])
 
-            # ===== 戦略フィルター =====
-            if volatility < 0.010:
+            # 急騰しすぎ排除
+            if change_1d > 0.08:
                 continue
 
-            # 全銘柄：前日比+10%以上は除外
-            if change_1d > 0.10:
-                continue
+            item = {
+                "銘柄": name,
+                "コード": ticker,
+                "現在値": round(close, 1),
+                "概算購入額": round(buy_amount, 0),
+                "25日線": round(ma25, 1),
+                "10日高値": round(high10_prev, 1),
+                "出来高倍率": round(volume / volume_avg5, 2),
+                "ボラ": round(volatility, 4),
+                "前日比%": round(change_1d * 100, 2),
+                "損切-5%": round(close * STOP_LOSS, 1),
+                "利確+13%": round(close * TAKE_PROFIT, 1),
+                "区分": "ランキング" if name.startswith("YAHOO_") else "固定"
+            }
 
-            # ランキング銘柄：前日比+8%以上は除外
-            if name.startswith("YAHOO_") and change_1d > 0.08:
-                continue
+            # ===== 本命条件 =====
+            if (
+                close > ma25 and
+                close > high10_prev * 0.97 and
+                volume > volume_avg5 * 1.05 and
+                volatility >= 0.009
+            ):
+                results.append(item)
 
-            if close > ma25 and close > high10_prev and volume > volume_avg5:
-                results.append({
-                    "銘柄": name,
-                    "コード": ticker,
-                    "現在値": round(close, 1),
-                    "25日線": round(ma25, 1),
-                    "10日高値": round(high10_prev, 1),
-                    "出来高倍率": round(volume / volume_avg5, 2),
-                    "ボラ": round(volatility, 4),
-                    "前日比%": round(change_1d * 100, 2),
-                    "損切-5%": round(close * STOP_LOSS, 1),
-                    "利確+13%": round(close * TAKE_PROFIT, 1),
-                    "区分": "ランキング" if name.startswith("YAHOO_") else "固定"
-                })
+            # ===== 準本命・監視候補 =====
+            elif (
+                close > ma25 and
+                close > high10_prev * 0.98 and
+                volume > volume_avg5 and
+                volatility >= 0.008
+            ):
+                watch_results.append(item)
+
+            # ===== 弱めの監視候補 =====
+            elif (
+                close > ma25 and
+                volume > volume_avg5 and
+                volatility >= 0.007
+            ):
+                watch_results.append(item)
 
         except Exception as e:
             print("取得エラー:", name, ticker, e)
 
     df = pd.DataFrame(results)
+    watch_df = pd.DataFrame(watch_results)
 
-    if df.empty:
-        print("\n本日の候補なし")
-
-        requests.post(DISCORD_WEBHOOK_URL, json={
-            "content": "【本日の買い候補】\n本日の候補なし"
-        })
-
-    else:
+    if not df.empty:
         df = df.drop_duplicates(subset=["コード"])
         df = df.sort_values("出来高倍率", ascending=False)
 
@@ -192,18 +258,53 @@ else:
         selected = selected.drop_duplicates(subset=["コード"]).head(3)
 
         print("\n本日の買い候補 上位10")
-        display(df.head(10))
+        print(df.head(10))
 
-        print("\n自動選定 3銘柄")
-        display(selected)
+        print("\n自動選定")
+        print(selected)
 
         msg = "【本日の買い候補】\n"
 
         for _, row in selected.iterrows():
             msg += f"\n{row['銘柄']} ({row['コード']})"
             msg += f"\n現在値: {row['現在値']}"
+            msg += f"\n概算購入額: {row['概算購入額']}円"
             msg += f"\n損切: {row['損切-5%']}"
             msg += f"\n利確: {row['利確+13%']}"
+            msg += f"\n出来高倍率: {row['出来高倍率']}"
+            msg += f"\n前日比: {row['前日比%']}%"
             msg += f"\n区分: {row['区分']}\n"
 
         requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
+
+    else:
+        print("\n本命候補なし")
+
+        if watch_df.empty:
+            msg = "【本日の買い候補】\n本命候補なし\n監視候補もなし"
+            print(msg)
+            requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
+
+        else:
+            watch_df = watch_df.drop_duplicates(subset=["コード"])
+            watch_df = watch_df.sort_values("出来高倍率", ascending=False)
+
+            print("\n監視候補 上位5")
+            print(watch_df.head(5))
+
+            msg = "【本日の買い候補】\n本命候補なし\n\n【監視候補】※買わない。見るだけ\n"
+
+            for _, row in watch_df.head(5).iterrows():
+                msg += f"\n{row['銘柄']} ({row['コード']})"
+                msg += f"\n現在値: {row['現在値']}"
+                msg += f"\n概算購入額: {row['概算購入額']}円"
+                msg += f"\n出来高倍率: {row['出来高倍率']}"
+                msg += f"\nボラ: {row['ボラ']}"
+                msg += f"\n前日比: {row['前日比%']}%\n"
+
+            requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
+
+            # ===== 売り通知 =====
+if sell_msgs:
+    msg = "【売りシグナル】\n\n" + "\n".join(sell_msgs)
+    requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
