@@ -46,7 +46,7 @@ if not DISCORD_WEBHOOK_URL:
 # ===== 設定 =====
 TAKE_PROFIT = 1.13
 STOP_LOSS = 0.95
-MAX_BUY_AMOUNT = 300000  # 100株で30万円以内
+MAX_BUY_AMOUNT = 500000  # 100株で50万円以内
 
 # ===== 固定銘柄 =====
 base_tickers = {
