@@ -7,7 +7,7 @@ import datetime
 # =========================
 # Discord設定
 # =========================
-DISCORD_WEBHOOK_URL = os.getenv("https://discord.com/api/webhooks/1545315524819288064/nkJ4kkraWEO9-Zg1v7R5ErXkymJOltMrTVe72vmVkJ4o79ceKv6lZsF4Xw9IN2xd2eiK")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 if not DISCORD_WEBHOOK_URL:
     raise ValueError("DISCORD_WEBHOOK_URL が設定されていません")
