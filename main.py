@@ -583,6 +583,7 @@ if market_mode == "NORMAL":
 elif market_mode == "PULLBACK":
 
     dip_results = []
+    near_results = []
 
     for name, ticker in base_tickers.items():
 
@@ -641,31 +642,21 @@ elif market_mode == "PULLBACK":
 
             latest = data.iloc[-1]
 
-            close = float(
-                latest["Close"]
-            )
-
+            close = float(latest["Close"])
             buy_amount = close * 100
 
+            # 100株50万円以内
             if buy_amount > MAX_BUY_AMOUNT:
                 continue
 
-            ma25 = float(
-                latest["MA25"]
-            )
-
-            ma200 = float(
-                latest["MA200"]
-            )
+            ma25 = float(latest["MA25"])
+            ma200 = float(latest["MA200"])
 
             ma200_20days_ago = float(
-                data["MA200"]
-                .iloc[-21]
+                data["MA200"].iloc[-21]
             )
 
-            rsi = float(
-                latest["RSI14"]
-            )
+            rsi = float(latest["RSI14"])
 
             high20 = float(
                 data["High"]
@@ -679,9 +670,7 @@ elif market_mode == "PULLBACK":
 
             change_1d = float(
                 data["Close"]
-                .pct_change(
-                    fill_method=None
-                )
+                .pct_change(fill_method=None)
                 .iloc[-1]
             )
 
@@ -693,92 +682,129 @@ elif market_mode == "PULLBACK":
                 # 長期上昇
                 close > ma200
 
-                and ma200 >
-                ma200_20days_ago
+                and ma200 > ma200_20days_ago
 
-                # 短期調整中
+                # 短期調整
                 and close < ma25
 
-                # 高値から5〜15%下落
-                and -0.15 <=
-                drawdown <= -0.05
+                # 20日高値から5〜15%下落
+                and -0.15 <= drawdown <= -0.05
 
-                # 売られすぎ手前
+                # RSI 30〜50
                 and 30 <= rsi <= 50
 
-                # 1日で暴落しすぎ除外
+                # 1日暴落を除外
                 and change_1d > -0.08
             )
 
+            item = {
+
+                "銘柄": name,
+
+                "コード": ticker,
+
+                "現在値": round(close, 1),
+
+                "概算購入額": round(
+                    buy_amount,
+                    0
+                ),
+
+                "25日線": round(
+                    ma25,
+                    1
+                ),
+
+                "200日線": round(
+                    ma200,
+                    1
+                ),
+
+                "20日高値": round(
+                    high20,
+                    1
+                ),
+
+                "高値から下落%": round(
+                    drawdown * 100,
+                    2
+                ),
+
+                "RSI14": round(
+                    rsi,
+                    1
+                ),
+
+                "前日比%": round(
+                    change_1d * 100,
+                    2
+                ),
+
+                "損切-5%": round(
+                    close * STOP_LOSS,
+                    1
+                ),
+
+                "利確+13%": round(
+                    close * TAKE_PROFIT,
+                    1
+                )
+            }
+
+            # =========================
+            # 押し目候補
+            # =========================
             if dip_condition:
 
-                dip_results.append({
+                item["押し目スコア"] = 100
+                dip_results.append(item)
 
-                    "銘柄": name,
+            else:
 
-                    "コード": ticker,
+                # =========================
+                # 押し目に近い銘柄をスコア化
+                # =========================
+                score = 0
 
-                    "現在値":
-                        round(close, 1),
+                # ① 200日線より上
+                if close > ma200:
+                    score += 25
 
-                    "概算購入額":
-                        round(
-                            buy_amount,
-                            0
-                        ),
+                # ② 200日線が上向き
+                if ma200 > ma200_20days_ago:
+                    score += 25
 
-                    "25日線":
-                        round(
-                            ma25,
-                            1
-                        ),
+                # ③ 25日線より下
+                if close < ma25:
+                    score += 15
 
-                    "200日線":
-                        round(
-                            ma200,
-                            1
-                        ),
+                # ④ 高値からの下落率
+                if -0.15 <= drawdown <= -0.05:
+                    score += 20
 
-                    "20日高値":
-                        round(
-                            high20,
-                            1
-                        ),
+                elif -0.18 <= drawdown < -0.15:
+                    score += 10
 
-                    "高値から下落%":
-                        round(
-                            drawdown
-                            * 100,
-                            2
-                        ),
+                elif -0.05 < drawdown <= -0.03:
+                    score += 10
 
-                    "RSI14":
-                        round(
-                            rsi,
-                            1
-                        ),
+                # ⑤ RSI
+                if 30 <= rsi <= 50:
+                    score += 15
 
-                    "前日比%":
-                        round(
-                            change_1d
-                            * 100,
-                            2
-                        ),
+                elif 25 <= rsi < 30:
+                    score += 8
 
-                    "損切-5%":
-                        round(
-                            close
-                            * STOP_LOSS,
-                            1
-                        ),
+                elif 50 < rsi <= 55:
+                    score += 8
 
-                    "利確+13%":
-                        round(
-                            close
-                            * TAKE_PROFIT,
-                            1
-                        )
-                })
+                # 暴落日は減点
+                if change_1d <= -0.08:
+                    score -= 20
+
+                item["押し目スコア"] = score
+
+                near_results.append(item)
 
         except Exception as e:
 
@@ -794,22 +820,16 @@ elif market_mode == "PULLBACK":
         dip_results
     )
 
+    near_df = pd.DataFrame(
+        near_results
+    )
 
-    if dip_df.empty:
 
-        msg = (
-            "【押し目買いチェック】\n"
-            "相場モード: PULLBACK\n\n"
-            "現在は地合い調整中\n"
-            "押し目条件に該当する"
-            "固定銘柄なし"
-        )
+    # =========================
+    # 押し目候補あり
+    # =========================
+    if not dip_df.empty:
 
-        send_discord(msg)
-
-    else:
-
-        # 下落率が大きい順
         dip_df = (
             dip_df
             .sort_values(
@@ -822,13 +842,10 @@ elif market_mode == "PULLBACK":
         msg = (
             "【押し目買い候補】\n"
             "⚠️ 相場モード: PULLBACK\n"
-            "長期上昇トレンド内の"
-            "短期調整候補\n"
+            "長期上昇トレンド内の短期調整候補\n"
         )
 
-        for _, row in (
-            dip_df.iterrows()
-        ):
+        for _, row in dip_df.iterrows():
 
             msg += (
                 f"\n{row['銘柄']} "
@@ -880,38 +897,123 @@ elif market_mode == "PULLBACK":
                 f"{row['利確+13%']}\n"
             )
 
+
+        # =========================
+        # 押し目に近い上位3銘柄
+        # =========================
+        if not near_df.empty:
+
+            near_df = (
+                near_df
+                .sort_values(
+                    "押し目スコア",
+                    ascending=False
+                )
+                .head(3)
+            )
+
+            msg += (
+                "\n\n【押し目監視 上位3】"
+                "\n※まだ買い条件未達\n"
+            )
+
+            for _, row in near_df.iterrows():
+
+                msg += (
+                    f"\n{row['銘柄']} "
+                    f"({row['コード']})"
+                )
+
+                msg += (
+                    f"\n押し目スコア: "
+                    f"{row['押し目スコア']}点"
+                )
+
+                msg += (
+                    f"\n現在値: "
+                    f"{row['現在値']}"
+                )
+
+                msg += (
+                    f"\n20日高値から: "
+                    f"{row['高値から下落%']}%"
+                )
+
+                msg += (
+                    f"\nRSI14: "
+                    f"{row['RSI14']}"
+                )
+
+                msg += (
+                    f"\n前日比: "
+                    f"{row['前日比%']}%\n"
+                )
+
         send_discord(msg)
 
 
-# =========================
-# OFF
-# =========================
-else:
+    # =========================
+    # 押し目候補なし
+    # =========================
+    else:
 
-    msg = (
-        "【本日の買い候補】\n"
-        "相場モード: OFF\n\n"
-        "日経の長期トレンドが弱いため"
-        "新規買い停止\n\n"
-        f"日経平均: "
-        f"{round(nikkei_close,1)}\n"
-        f"25日線: "
-        f"{round(nikkei_ma25,1)}\n"
-        f"200日線: "
-        f"{round(nikkei_ma200,1)}"
-    )
-
-    send_discord(msg)
+        msg = (
+            "【押し目買いチェック】\n"
+            "相場モード: PULLBACK\n\n"
+            "現在は地合い調整中\n"
+            "押し目条件に該当する固定銘柄なし\n"
+        )
 
 
-# =========================
-# 売り通知
-# =========================
-if sell_msgs:
+        # =========================
+        # 近い銘柄 上位3
+        # =========================
+        if not near_df.empty:
 
-    msg = (
-        "【売りシグナル】\n\n"
-        + "\n".join(sell_msgs)
-    )
+            near_df = (
+                near_df
+                .sort_values(
+                    "押し目スコア",
+                    ascending=False
+                )
+                .head(3)
+            )
 
-    send_discord(msg)
+            msg += (
+                "\n【押し目監視 上位3】"
+                "\n※まだ買い条件未達\n"
+            )
+
+            for _, row in near_df.iterrows():
+
+                msg += (
+                    f"\n{row['銘柄']} "
+                    f"({row['コード']})"
+                )
+
+                msg += (
+                    f"\n押し目スコア: "
+                    f"{row['押し目スコア']}点"
+                )
+
+                msg += (
+                    f"\n現在値: "
+                    f"{row['現在値']}"
+                )
+
+                msg += (
+                    f"\n20日高値から: "
+                    f"{row['高値から下落%']}%"
+                )
+
+                msg += (
+                    f"\nRSI14: "
+                    f"{row['RSI14']}"
+                )
+
+                msg += (
+                    f"\n前日比: "
+                    f"{row['前日比%']}%\n"
+                )
+
+        send_discord(msg)
